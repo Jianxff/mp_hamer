@@ -24,7 +24,12 @@ pip install -e .
 ###### 1. pretrained HaMeR model
 Download [HaMeR pretrained model](https://www.cs.utexas.edu/~pavlakos/hamer/data/hamer_demo_data.tar.gz) and unpack it.
 
-###### 2. run
+###### 2. run demo
 ```bash
+# for single image
+python demo/run.py --image ${path/to/image} --out ${path/to/out} --focal 3000
+
+# for video sequence
+python demo/run.py --video ${path/to/video} --out ${path/to/out} --focal 3000
 ```
 

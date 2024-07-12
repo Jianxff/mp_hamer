@@ -1,1 +1,2 @@
-from .estimator import PoseEstimator as Estimator
+from .estimator import PoseEstimator as Pipeline
+from .renderer import Renderer, HAND_MATERIAL

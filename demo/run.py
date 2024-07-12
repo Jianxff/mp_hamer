@@ -1,68 +1,107 @@
-from PIL import Image
+# standard library
+from typing import *
+from pathlib import Path
+# third party
 import numpy as np
-from mp_hamer import Estimator
-import pyrender
 import cv2
-import trimesh
+import argparse
+from tqdm import tqdm
+# mp_hamer
+import mp_hamer
 
-pipe = Estimator()
+# create pipeline
+pipeline = mp_hamer.Pipeline()
 
-# from mp_hamer.hamer.utils.renderer import cam_crop_to_full
 
-focal = 3000
-
-# image = np.array(Image.open('demo/test.jpg'))
-image = cv2.imread('demo/test.jpg')
-image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-print(image.shape)
-
-for _ in range(20):
-    results = pipe(image, focal_length=focal)
-
-if len(results) > 0:
-    res = results[0]
-
-    mesh = pipe.make_mesh(res['verts'], is_right=res['is_right'])
-    mesh.export('demo/hand.obj')
-
-    renderer = pyrender.OffscreenRenderer(
-        viewport_width=image.shape[1],
-        viewport_height=image.shape[0],
-        point_size=1.0
-    )
-    material = pyrender.MetallicRoughnessMaterial(
-        metallicFactor=0.0,
-        alphaMode='OPAQUE',
-        baseColorFactor=(0.65098039,  0.74117647,  0.85882353)
-    )
-    rot = trimesh.transformations.rotation_matrix(
-            np.radians(180), [1, 0, 0])
-    mesh.apply_transform(rot)
-    mesh = pyrender.Mesh.from_trimesh(mesh, material=material)
-
-    scene = pyrender.Scene(bg_color=[0.0, 0.0, 0.0, 0.0],
-                            ambient_light=(0.3, 0.3, 0.3))
-    scene.add(mesh, 'mesh')
-
-    camera_pose = np.eye(4)
-    camera_center = [image.shape[1] / 2., image.shape[0] / 2.]
-    camera = pyrender.IntrinsicsCamera(fx=focal, fy=focal,
-                                        cx=camera_center[0], cy=camera_center[1], zfar=1e12)
+# for single image
+def predict_image(args):
+    # read image
+    image = cv2.imread(args.image)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     
-    # Create camera node and add it to pyRender scene
-    scene.add(camera, pose=camera_pose)
-    # add light
-    light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=1.0)
-    scene.add(light)
+    H, W = image.shape[:2]
+    if args.focal is None:
+        args.focal = max(H, W)
 
-    color, d = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
-    cv2.imwrite('demo/render.jpg', cv2.cvtColor(color, cv2.COLOR_RGBA2BGR))
-
-    color = color.astype(np.float32) / 255.0
-    input_img = image.astype(np.float32)/255.0
-    input_img = np.concatenate([input_img, np.ones_like(input_img[:,:,:1])], axis=2) # Add alpha channel
-    input_img_overlay = input_img[:,:,:3] * (1-color[:,:,3:]) + color[:,:,:3] * color[:,:,3:]
-
-    cv2.imwrite('demo/output.jpg', 255 * input_img_overlay[:, :, ::-1])
-
+    # inference
+    results = pipeline(rgb_image=image, focal_length=args.focal)
     
+    # render
+    renderer = mp_hamer.Renderer(W, H, args.focal)
+    for i, result in enumerate(results):
+        # create hand mesh
+        mesh = pipeline.create_trimesh(
+            verts=result['verts'] * np.array([1, -1, -1]), # opencv to openGL
+            is_right=result['is_right']
+        )
+        # add to scene
+        renderer.add(
+            name=f'hand_{i}',
+            mesh=renderer.from_trimesh(mesh, mp_hamer.HAND_MATERIAL)
+        )
+    
+    # offscreen render
+    image = renderer.render_image(image_rgb=image)
+    cv2.imwrite(args.out, image[:,:,::-1])
+
+
+# for video
+def predict_video(args):
+    # init video reader
+    cap = cv2.VideoCapture(args.video)
+    H, W = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)), int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    TOTAL = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    FPS = int(cap.get(cv2.CAP_PROP_FPS))
+    if args.focal is None:
+        args.focal = max(H, W)
+    
+    # init renderer
+    renderer = mp_hamer.Renderer(W, H, args.focal)
+
+    # create video writer
+    out = cv2.VideoWriter(args.out, cv2.VideoWriter_fourcc(*'mp4v'), FPS, (W, H))
+    hand_node = None
+
+    ### iterate inference
+    for _ in tqdm(range(TOTAL)):
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # infer
+        results = pipeline(rgb_image=frame, focal_length=args.focal)
+        for result in results:
+            verts, is_right = result['verts'], result['is_right']
+            # remove previous
+            renderer.remove(hand_node)
+            # add new
+            mesh = pipeline.create_trimesh(verts * np.array([1, -1, -1]), is_right)
+            hand_node = renderer.add(
+                name=f'hand_{int(is_right)}',
+                mesh=renderer.from_trimesh(mesh, mp_hamer.HAND_MATERIAL)
+            )
+
+        # offscreen render
+        image = renderer.render_image(image_rgb=frame)[:, :, ::-1] # RGB to BGR
+        out.write(image)
+    
+    # release resources
+    cap.release()
+    out.release()
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--image', type=str, default=None, help='Path to input image')
+    parser.add_argument('--video', type=str, default=None, help='Path to input video')
+    parser.add_argument('--out', type=str, required=True, help='Path to output image/video')
+    parser.add_argument('--focal', type=float, default=None, help='Focal length of camera')
+    args = parser.parse_args()
+
+    if args.image and args.video:
+        raise ValueError("Cannot specify both image and video")
+    
+    if args.image:
+        predict_image(args)
+    else:
+        predict_video(args)

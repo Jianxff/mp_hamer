@@ -8,6 +8,7 @@ from PIL import Image
 import cv2
 import time
 import trimesh
+# import open3d
 ### hamer
 from .hamer.models import load_hamer, DEFAULT_CHECKPOINT
 # from .hamer.utils.renderer import Renderer, cam_crop_to_full
@@ -81,7 +82,6 @@ class PoseEstimator:
         h_top = max(0, -(c_y - b))
         h_bottom = max(H, c_y + b) - H
         padding = max([w_left, w_right, h_top, h_bottom])
-        print('padding:', padding)
         # pad original image
         image_patch_full = np.zeros((H + 2 * padding, W + 2 * padding, 3), dtype=np.uint8)
         image_patch_full[padding:padding + H, padding:padding + W] = image_rgb
@@ -126,15 +126,11 @@ class PoseEstimator:
     def __call__(
         self,
         rgb_image: Union[np.ndarray, str, Path],
-        focal_length: Optional[float] = None,
+        focal_length: float,
         timestamp_ms: Optional[int] = None
     ) -> List[np.ndarray]:
         if isinstance(rgb_image, (str, Path)):
             rgb_image = np.array(Image.open(rgb_image))
-        
-        # set focal length
-        if focal_length is None:
-            focal_length = max(rgb_image.shape[:2])
         
         # detect hands
         results = self.detector(rgb_image, timestamp_ms)
@@ -153,6 +149,12 @@ class PoseEstimator:
             data, extra_info = self.patch_data(rgb_image, detection, focal_length)
             # inference
             out = self.model(data)
+            
+            # ## debug ##
+            # debug_res = self.render_result(data['img'][0], out)
+            # cv2.imwrite('debug.jpg', debug_res)
+            # ## 
+            
             # verts
             verts = self.extract_verts(out, extra_info)
             all_out.append({
@@ -167,8 +169,8 @@ class PoseEstimator:
     def extract_verts(
         self,
         prediction: Dict,
-        extra_info: Dict
-    ) -> trimesh.Trimesh:
+        extra_info: Dict,
+    ) -> np.ndarray:
         is_right = extra_info['is_right']
 
         # get vertices and pred_cam
@@ -193,38 +195,61 @@ class PoseEstimator:
 
         return verts + np.array([tx, ty, tz])
     
+    @staticmethod
+    def convert_verts_to_opengl(verts: np.ndarray) -> np.ndarray:
+        verts_opengl = verts.copy()
+        verts_opengl[:, 1] *= -1
+        verts_opengl[:, 2] *= -1
+        return verts_opengl
 
-    def make_mesh(
+    def create_trimesh(
         self,
         verts: np.ndarray,
-        is_right: bool = True,
-        color = LIGHT_BLUE
+        is_right: Optional[bool] = True,
+        color: Optional[Tuple] = LIGHT_BLUE,
     ) -> trimesh.Trimesh:
         verts_color = np.array([(*color, 1)] * verts.shape[0])
         if is_right:
             mesh = trimesh.Trimesh(vertices=verts, faces=self.mano_faces.copy(), vertex_colors=verts_color)
         else:
             mesh = trimesh.Trimesh(vertices=verts, faces=self.mano_faces_left.copy(), vertex_colors=verts_color)
-        
         return mesh
+
+    
+    # def create_geometry(
+    #     self,
+    #     verts: np.ndarray,
+    #     is_right: Optional[bool] = True,
+    #     color: Optional[Tuple] = LIGHT_BLUE,
+    # ) -> open3d.geometry.TriangleMesh:
+    #     triangles = self.mano_faces.copy() if is_right else self.mano_faces_left.copy()
+    #     mesh = open3d.geometry.TriangleMesh(
+    #         vertices=open3d.utility.Vector3dVector(verts), 
+    #         triangles=open3d.utility.Vector3iVector(triangles)
+    #     )
+    #     mesh.compute_vertex_normals()
+    #     mesh.paint_uniform_color(color)
+    #     return mesh
         
 
-    # def render_result(
-    #     self,
-    #     image_rgb: np.ndarray,
-    #     out
-    # ) -> np.ndarray:
-    #     renderer = Renderer(self.model_cfg, faces=self.model.mano.faces)
-    #     regression_img = renderer(
-    #         out['pred_vertices'][0].detach().cpu().numpy(),
-    #         out['pred_cam_t'][0].detach().cpu().numpy(),
-    #         out['focal_length'][0][0],
-    #         image_rgb,
-    #         mesh_base_color=LIGHT_BLUE,
-    #         scene_bg_color=(1, 1, 1),
-    #     )
+    def render_result(
+        self,
+        image_rgb: torch.Tensor,
+        out
+    ) -> np.ndarray:
+        from .hamer.utils.renderer import Renderer
 
-    #     return 255 * regression_img[:, :, ::-1]
+        renderer = Renderer(self.model_cfg, faces=self.model.mano.faces)
+        regression_img = renderer(
+            out['pred_vertices'][0].detach().cpu().numpy(),
+            out['pred_cam_t'][0].detach().cpu().numpy(),
+            out['focal_length'][0][0],
+            image_rgb,
+            mesh_base_color=LIGHT_BLUE,
+            scene_bg_color=(1, 1, 1),
+        )
+
+        return 255 * regression_img[:, :, ::-1]
         
         
 
