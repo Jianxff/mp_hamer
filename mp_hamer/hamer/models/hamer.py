@@ -115,7 +115,7 @@ class HAMER(pl.LightningModule):
         # Compute camera translation
         device = pred_mano_params['hand_pose'].device
         dtype = pred_mano_params['hand_pose'].dtype
-        focal_length = self.cfg.EXTRA.FOCAL_LENGTH * torch.ones(batch_size, 2, device=device, dtype=dtype)
+        focal_length = batch['focal'] * torch.ones(batch_size, 2, device=device, dtype=dtype)
         pred_cam_t = torch.stack([pred_cam[:, 1],
                                   pred_cam[:, 2],
                                   2*focal_length[:, 0]/(self.cfg.MODEL.IMAGE_SIZE * pred_cam[:, 0] +1e-9)],dim=-1)

@@ -170,6 +170,7 @@ class Renderer:
     def __call__(self,
                 vertices: np.array,
                 camera_translation: np.array,
+                focal: float,
                 image: torch.Tensor,
                 full_frame: bool = False,
                 imgname: Optional[str] = None,
@@ -222,7 +223,7 @@ class Renderer:
         camera_pose = np.eye(4)
         camera_pose[:3, 3] = camera_translation
         camera_center = [image.shape[1] / 2., image.shape[0] / 2.]
-        camera = pyrender.IntrinsicsCamera(fx=self.focal_length, fy=self.focal_length,
+        camera = pyrender.IntrinsicsCamera(fx=focal, fy=focal,
                                            cx=camera_center[0], cy=camera_center[1], zfar=1e12)
         scene.add(camera, pose=camera_pose)
 

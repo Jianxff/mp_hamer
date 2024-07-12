@@ -51,7 +51,7 @@ class HandTracker:
         results: NamedTuple,
         image_HW: Tuple[int, int],
         extend_scale: float = 1
-    ) -> Tuple[int, int, int, int]:
+    ) -> List[Tuple[Tuple[int], bool]]:
         bbox = []
         right = []
         if results.hand_landmarks:
