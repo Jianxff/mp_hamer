@@ -1,0 +1,9 @@
+# python
+__pycache__/
+*.egg-info/
+dist
+build
+# cache dir
+.cache
+.test
+_DATA
