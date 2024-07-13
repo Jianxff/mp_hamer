@@ -34,6 +34,8 @@ def predict_image(args):
             verts=result['verts'] * np.array([1, -1, -1]), # opencv to openGL
             is_right=result['is_right']
         )
+        if args.save:
+            mesh.export(f'hand_{i}.obj')
         # add to scene
         renderer.add(
             name=f'hand_{i}',
@@ -95,6 +97,7 @@ if __name__ == '__main__':
     parser.add_argument('--image', type=str, default=None, help='Path to input image')
     parser.add_argument('--video', type=str, default=None, help='Path to input video')
     parser.add_argument('--out', type=str, required=True, help='Path to output image/video')
+    parser.add_argument('--save', action='store_true', help='Save mesh')
     parser.add_argument('--focal', type=float, default=None, help='Focal length of camera')
     args = parser.parse_args()
 
