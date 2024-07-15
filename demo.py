@@ -10,8 +10,7 @@ from tqdm import tqdm
 import mp_hamer
 
 # create pipeline
-pipeline = mp_hamer.Pipeline()
-
+pipeline = mp_hamer.Pipeline(mediapipe_gpu=False)
 
 # for single image
 def predict_image(args):
@@ -39,7 +38,8 @@ def predict_image(args):
         # add to scene
         renderer.add(
             name=f'hand_{i}',
-            mesh=renderer.from_trimesh(mesh, mp_hamer.HAND_MATERIAL)
+            mesh=mesh,
+            color=renderer.COLOR_BLUE
         )
     
     # offscreen render
@@ -62,7 +62,6 @@ def predict_video(args):
 
     # create video writer
     out = cv2.VideoWriter(args.out, cv2.VideoWriter_fourcc(*'mp4v'), FPS, (W, H))
-    hand_node = None
 
     ### iterate inference
     for _ in tqdm(range(TOTAL)):
@@ -74,13 +73,13 @@ def predict_video(args):
         results = pipeline(rgb_image=frame, focal_length=args.focal)
         for result in results:
             verts, is_right = result['verts'], result['is_right']
-            # remove previous
-            renderer.remove(hand_node)
             # add new
             mesh = pipeline.create_trimesh(verts * np.array([1, -1, -1]), is_right)
-            hand_node = renderer.add(
+            renderer.add(
                 name=f'hand_{int(is_right)}',
-                mesh=renderer.from_trimesh(mesh, mp_hamer.HAND_MATERIAL)
+                mesh=mesh,
+                color=renderer.COLOR_BLUE,
+                replace=True
             )
 
         # offscreen render

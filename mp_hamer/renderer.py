@@ -5,15 +5,15 @@ import numpy as np
 import pyrender
 import trimesh
 # import open3d as o3d
-# import cv2
+import cv2
 
-HAND_MATERIAL = pyrender.MetallicRoughnessMaterial(
-    metallicFactor=0.0,
-    alphaMode='OPAQUE',
-    baseColorFactor=(0.65098039,  0.74117647,  0.85882353)
-)
 
 class Renderer:
+    COLOR_BLUE = (0.65, 0.74, 0.86)
+    COLOR_GREEN = (0.65, 0.86, 0.74)
+    COLOR_WHITE = (1.0, 1.0, 1.0)
+
+    nodes = {}
     
     def __init__(
         self,
@@ -43,28 +43,88 @@ class Renderer:
             znear=znear, zfar=zfar
         )
         # add it to pyRender scene
-        self.scene.add(camera, pose=camera_pose)
+        self.cam_node = pyrender.Node(camera=camera, matrix=camera_pose)
+        self.scene.add_node(self.cam_node)
+        # self.scene.add(camera, pose=camera_pose)
         # add light
-        light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=1.5)
+        light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=2.0)
         self.scene.add(light)
 
 
-    def add(self, name: str, mesh: pyrender.Mesh) -> pyrender.Node:
+    def add(
+        self, 
+        name: str, 
+        mesh: trimesh.Trimesh, 
+        color: Optional[Tuple[float]] = COLOR_WHITE,
+        replace: Optional[bool] = False
+    ) -> pyrender.Node:
+        # replace old node
+        if replace:
+            self.remove(name)
+        # create pyrender mesh
+        material = pyrender.MetallicRoughnessMaterial(
+            metallicFactor=0.2,
+            alphaMode='OPAQUE',
+            baseColorFactor=color
+        )
+        mesh = pyrender.Mesh.from_trimesh(mesh, material=material)
         # create node
         mesh_node = pyrender.Node(mesh=mesh, name=name, matrix=np.eye(4))
         # add node to scene
         self.scene.add_node(mesh_node)
+        self.nodes[name] = mesh_node
+
         return mesh_node
     
-    def remove(self, node: pyrender.Node) -> None:
-        if node and self.scene.has_node(node):
+    def set(
+        self, 
+        name: str, 
+        pose: Optional[np.ndarray] = None,
+        visible: Optional[bool] = None
+    ) -> None:
+        node = self.nodes.get(name, None)
+        if node is not None:
+            if pose is not None:
+                self.scene.set_pose(node, pose)
+            if visible is not None:
+                node.mesh.is_visible = visible
+    
+    def get(self, name: str) -> pyrender.Node:
+        return self.nodes.get(name, None)
+    
+    def remove(self, name) -> None:
+        node = self.nodes.get(name, None)
+        if node is not None:
             self.scene.remove_node(node)
+            del self.nodes[name]
 
     def render(
         self
     ) -> np.ndarray:
         return self.render_pipe.render(self.scene, flags=pyrender.RenderFlags.RGBA)
 
+    def render_mask(
+        self
+    ) -> np.ndarray:
+        color, _ = self.render_pipe.render(self.scene, flags=pyrender.RenderFlags.RGBA)
+        mask = (color[..., 3:] > 0).astype(np.uint8) * 255
+        mask = np.squeeze(mask)
+        return mask
+    
+    def render_sideview(
+        self,
+        pose_t: List[float] = [0.3, 0, -0.3],
+        pose_r: List[List[float]] = [[0, 0, 1],[0, 1, 0],[-1, 0, 0]]
+    ) -> np.ndarray:
+        side_pose = np.eye(4)
+        side_pose[:3, 3] = np.array(pose_t)
+        # look to the negative x-axis
+        side_pose[:3, :3] = np.array(pose_r)
+        self.scene.set_pose(self.cam_node, side_pose)
+        color, _ = self.render_pipe.render(self.scene, flags=pyrender.RenderFlags.RGBA)
+        self.scene.set_pose(self.cam_node, np.eye(4))
+        color = cv2.cvtColor(color, cv2.COLOR_RGBA2RGB)
+        return color
 
     def render_image(
         self,
@@ -81,15 +141,7 @@ class Renderer:
         # overlay render image and original image
         image_overlay = image[:,:,:3] * (1 - color[:,:,3:]) + color[:,:,:3] * color[:,:,3:]
         return (image_overlay * 255).astype(np.uint8)
-
-
-    @staticmethod
-    def from_trimesh(
-        mesh: trimesh.Trimesh,
-        material: Any = None
-    ) -> pyrender.Mesh:
-        return pyrender.Mesh.from_trimesh(mesh, material=material)
-
+    
 # class Renderer:
 #     geometries = {}
 

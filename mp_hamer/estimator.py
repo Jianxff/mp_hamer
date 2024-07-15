@@ -33,7 +33,8 @@ class PoseEstimator:
     def __init__(
         self, 
         checkpoint: Path = Path(DEFAULT_CHECKPOINT),
-        device: Optional[torch.device] = DEFAULT_DEVICE
+        device: Optional[torch.device] = DEFAULT_DEVICE,
+        mediapipe_gpu: Optional[bool] = torch.cuda.is_available()
     ) -> None:
         # load hamer model
         model, model_cfg = load_hamer(str(checkpoint))
@@ -41,6 +42,7 @@ class PoseEstimator:
         self.model = model.to(device)
         self.model.eval()
         self.model_cfg = model_cfg
+        self.FOCAL = 1020
 
         # hamer config
         self.img_size = model_cfg.MODEL.IMAGE_SIZE
@@ -49,7 +51,7 @@ class PoseEstimator:
         self.device = device
 
         # hand detector
-        self.detector = HandTracker(use_gpu=torch.cuda.is_available())
+        self.detector = HandTracker(use_gpu=mediapipe_gpu)
 
         # mano faces
         self.mano_faces = np.concatenate([model.mano.faces, MANO_FACES_NEW], axis=0)
@@ -59,8 +61,7 @@ class PoseEstimator:
     def patch_data(
         self, 
         image_rgb: np.ndarray, 
-        detection: Tuple[np.ndarray, bool],
-        focal_length: float,
+        detection: Tuple[np.ndarray, bool]
     ) -> Tuple[Dict, Dict]:
         bbox, is_right = detection
         H, W = image_rgb.shape[:2]
@@ -108,18 +109,19 @@ class PoseEstimator:
         image_torch = torch.from_numpy(image_patch).unsqueeze(0).half()
 
         # make extra data
+        # scale = self.img_size / max([H, W])
         extra = {
             'is_right': is_right,
             'box_center': (bbox[0], bbox[1]),
             'box_size': bbox[2],
             'img_size': (H, W), # HW
-            'focal_length': focal_length
+            'scale': scale
         }
 
         ### transform focal length
-        scaled_focal = focal_length * scale
+        # scaled_focal = focal_length * scale
 
-        return {'img' : image_torch.to(self.device), 'focal': scaled_focal}, extra
+        return {'img' : image_torch.to(self.device), 'focal': self.FOCAL}, extra
     
 
     @torch.no_grad()
@@ -127,7 +129,8 @@ class PoseEstimator:
         self,
         rgb_image: Union[np.ndarray, str, Path],
         focal_length: float,
-        timestamp_ms: Optional[int] = None
+        timestamp_ms: Optional[int] = None,
+        force_side: Optional[str] = None
     ) -> List[np.ndarray]:
         if isinstance(rgb_image, (str, Path)):
             rgb_image = np.array(Image.open(rgb_image))
@@ -137,7 +140,8 @@ class PoseEstimator:
         detections = self.detector.get_bbox(
             results=results, 
             image_HW=rgb_image.shape[:2], 
-            extend_scale=1.5
+            extend_scale=1.5,
+            force_side=force_side
         )
 
         if detections is None or len(detections) == 0:
@@ -146,7 +150,7 @@ class PoseEstimator:
         all_out = []
         for detection in detections:
             # patch data
-            data, extra_info = self.patch_data(rgb_image, detection, focal_length)
+            data, extra_info = self.patch_data(rgb_image, detection)
             # inference
             out = self.model(data)
             
@@ -156,29 +160,30 @@ class PoseEstimator:
             # ## 
             
             # verts
-            verts = self.extract_verts(out, extra_info)
-            all_out.append({
-                'verts': verts,
-                'bbox': detection[0],
-                'is_right': detection[1]
-            })
+            mano = self.extract_mano(out, extra_info, focal_length)
+            mano['bbox'] = detection[0]
+            all_out.append(mano)
 
         return all_out
-    
 
-    def extract_verts(
+
+    def extract_mano(
         self,
         prediction: Dict,
         extra_info: Dict,
-    ) -> np.ndarray:
+        focal_length: Optional[float] = 5000
+    ) -> Dict:
         is_right = extra_info['is_right']
 
         # get vertices and pred_cam
+        # kpts3d = prediction['pred_keypoints_3d'][0].detach().cpu().numpy()
+        orient = prediction['pred_mano_params']['global_orient'][0].detach().cpu().numpy()
         verts = prediction['pred_vertices'][0].detach().cpu().numpy()
         camera = prediction['pred_cam'][0].detach().cpu().numpy()
         if not is_right:
             verts[:, 0] *= -1
             camera[1] *= -1
+            orient[:, 0] *= -1
         
         # make camera transform
         cx, cy = extra_info['box_center']
@@ -186,14 +191,22 @@ class PoseEstimator:
         h, w = extra_info['img_size'] # image size, HW
         w_2, h_2 = w / 2., h / 2.
         # focal transform
-        focal = extra_info['focal_length']
+        focal = self.FOCAL / extra_info['scale']
 
         bs = b * camera[0] + 1e-9
         tz = 2 * focal / bs
         tx = (2 * (cx - w_2) / bs) + camera[1]
         ty = (2 * (cy - h_2) / bs) + camera[2]
 
-        return verts + np.array([tx, ty, tz])
+        bias = np.array([tx, ty, tz * (focal_length / focal)])
+
+        return {
+            'verts': verts + bias,
+            # 'bias': bias,
+            'orient': orient,
+            # 'kpts3d': kpts3d,
+            'is_right': is_right
+        }
     
     @staticmethod
     def convert_verts_to_opengl(verts: np.ndarray) -> np.ndarray:

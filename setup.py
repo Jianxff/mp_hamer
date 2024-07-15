@@ -18,6 +18,7 @@ setup(
         'torchvision',
         'yacs',
         'timm',
+        'tqdm',
         'einops',
         'pillow',
         'chumpy @ git+https://github.com/mattloper/chumpy'

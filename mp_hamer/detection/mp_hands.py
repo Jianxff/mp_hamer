@@ -50,13 +50,17 @@ class HandTracker:
     def get_bbox(
         results: NamedTuple,
         image_HW: Tuple[int, int],
-        extend_scale: float = 1
+        extend_scale: float = 1,
+        force_side: Optional[str] = None
     ) -> List[Tuple[Tuple[int], bool]]:
         bbox = []
         right = []
         if results.hand_landmarks:
             for hand in results.handedness:
-                right.append(hand[0].category_name == 'Right')
+                is_right = hand[0].category_name == 'Right'
+                if force_side is not None:
+                    is_right = (force_side == 'Right')
+                right.append(is_right)
 
             image_hight, image_width = image_HW
 
